@@ -1,0 +1,244 @@
+<!doctype html>
+<html>
+<head>
+<title></title>
+<style>
+#phones {
+    display: block;
+
+}
+</style>
+</head>
+<body>
+    <h1>edgeview</h1>
+    <p>Pick a phone view</p>
+    <ul id="phones">
+    </ul>
+    <p>
+        Then add your app image <input type="file" id="files" name="files" disabled>
+    </p>
+
+    <div id="central-container"></div>
+
+<script>
+function getParameterByName(name) {
+    var match = RegExp('[?&]' + name + '=([^&]*)').exec(window.location.search);
+    return match && decodeURIComponent(match[1].replace(/\+/g, ' '));
+}
+
+function renderCanvasSectionToCanvasWithDistortion_pointByPoint(
+            source_canvas, source_ctx, source_rectangle,
+            source_shape, dest_shape, dest_canvas, dest_ctx,
+            callback
+        ) {
+    
+    /* This function does a crude point-by-point copy of the source
+       to the destination canvas. It should really be dividing up
+       the source into triangles and using canvas.drawImage to draw
+       the source triangles into the destination with appropriate
+       matrices for each, such as is done at 
+       http://tulrich.com/geekstuff/canvas/perspective.html, but 
+       the matrix maths is too hard. Contributions accepted. */
+
+    // find lengths of the two vertical sides of the destination
+    var left_vertical_x_diff = dest_shape.bl.x - dest_shape.tl.x;
+    var left_vertical_y_diff = dest_shape.bl.y - dest_shape.tl.y;
+    var left_vertical_length = Math.sqrt(
+        Math.pow(left_vertical_x_diff, 2) + 
+        Math.pow(left_vertical_y_diff, 2));
+    var right_vertical_x_diff = dest_shape.br.x - dest_shape.tr.x;
+    var right_vertical_y_diff = dest_shape.br.y - dest_shape.tr.y;
+    var right_vertical_length = Math.sqrt(
+        Math.pow(right_vertical_x_diff, 2) + 
+        Math.pow(right_vertical_y_diff, 2));
+
+    var vertical_steps = Math.max(left_vertical_length, 
+        right_vertical_length);
+
+    var line_start_y, line_start_x, line_end_y, line_end_y, 
+        line_diff_y, line_diff_x, horizontal_steps, point_x, point_y,
+        source_point_x, source_point_y;
+
+    var source_data = source_ctx.getImageData(source_rectangle.x,
+        source_rectangle.y, source_rectangle.w, source_rectangle.h);
+
+    for (var y=0; y<vertical_steps; y++) {
+        line_start_y = dest_shape.tl.y + 
+            ((y/vertical_steps) * left_vertical_y_diff);
+        line_start_x = dest_shape.tl.x + 
+            ((y/vertical_steps) * left_vertical_x_diff);
+        line_end_y = dest_shape.tr.y + 
+            ((y/vertical_steps) * right_vertical_y_diff);
+        line_end_x = dest_shape.tr.x + 
+            ((y/vertical_steps) * right_vertical_x_diff);
+
+        line_diff_y = line_end_y - line_start_y;
+        line_diff_x = line_end_x - line_start_x;
+
+        horizontal_steps = Math.sqrt(
+            Math.pow(line_diff_y, 2) + Math.pow(line_diff_x, 2));
+
+        for (var x=0; x<horizontal_steps; x++) {
+            point_x = line_start_x + ((x/horizontal_steps) * line_diff_x);
+            point_y = line_start_y + ((x/horizontal_steps) * line_diff_y);
+
+            source_point_x = Math.round(source_rectangle.w * (x/horizontal_steps));
+            source_point_y = Math.round(source_rectangle.h * (y/vertical_steps));
+            data_location = ((source_point_y * source_data.width) + source_point_x) * 4;
+            source_r = source_data.data[data_location];
+            source_g = source_data.data[data_location+1];
+            source_b = source_data.data[data_location+2];
+            source_a = source_data.data[data_location+3];
+            dest_ctx.fillStyle = "rgb(" + source_r + "," + source_g + "," + source_b + ")";
+            dest_ctx.fillRect(point_x, point_y, 2, 2);
+        }
+    }
+    callback();
+}
+
+function renderImageURLToCanvasWithDistortion(imageurl, dest_shape, dest_canvas, callback) {
+    /*
+        imageurl is a URL, not an Image object
+        destination points should look like
+        { tl: {x:?, y:?}, tr: {x:?, y:?}, bl: {x:?, y:?}, br: {x:?, y:?} }
+        dest_canvas will be rendered to by this function
+    */
+    var img = new Image();
+    img.src = imageurl;
+    img.onload = function() {
+        var source_canvas = document.createElement("canvas");
+        source_canvas.width = img.naturalWidth;
+        source_canvas.height = img.naturalHeight;
+        var source_ctx = source_canvas.getContext("2d");
+        var dest_ctx = dest_canvas.getContext("2d");
+        source_ctx.drawImage(img, 0, 0);
+        var source_rectangle = { x:0, y:0,
+            w:img.naturalWidth, h:img.naturalHeight};
+        var source_shape = {
+            tl: { x:source_rectangle.x, y: source_rectangle.y },
+            tr: { x:source_rectangle.x + source_rectangle.w, 
+                  y: source_rectangle.y },
+            bl: { x:source_rectangle.x, 
+                  y: source_rectangle.y + source_rectangle.h },
+            br: { x:source_rectangle.x + source_rectangle.w, 
+                  y: source_rectangle.y + source_rectangle.h }
+        };
+
+        renderCanvasSectionToCanvasWithDistortion_pointByPoint(
+            source_canvas, source_ctx, source_rectangle,
+            source_shape, dest_shape, dest_canvas, dest_ctx,
+            callback
+        );
+
+    }
+
+}
+
+function renderCombinationAsDataUrl(base_image_url, overlay_image_url, 
+    overlay_coords, callback) {
+    var image = new Image();
+    image.src = base_image_url;
+    image.onload = function() {
+        var c = document.createElement("canvas");
+        c.width = image.naturalWidth; c.height = image.naturalHeight;
+        c.getContext("2d").drawImage(image, 0, 0);
+        renderImageURLToCanvasWithDistortion(
+            overlay_image_url, 
+            {tl: {x:overlay_coords[0], y:overlay_coords[1]}, 
+             tr: {x:overlay_coords[2], y:overlay_coords[3]}, 
+             br: {x:overlay_coords[4], y:overlay_coords[5]}, 
+             bl: {x:overlay_coords[6], y:overlay_coords[7]}}, 
+             c,
+             function() {
+                callback(c.toDataURL("image/png"));
+             }
+        );
+    }
+}
+
+function display() {
+    var coords = [];
+    box.split(",").forEach(function(item) { 
+        coords.push(parseInt(item, 10));
+    });
+    renderCombinationAsDataUrl(phoneurl, appurl, coords, function(dataurl) {
+        var i = new Image();
+        i.src = dataurl;
+        document.body.appendChild(i);
+    });
+}
+
+var PHONE_IMAGES = [
+    { url: "ubuntu-edge-phone5.jpg", 
+        coords: "602,98,859,238,539,650,270,480" },
+    { url: "edge.png", 
+        coords: "73,130,385,133,382,685,78,702" },
+    { url: "ubuntuedge_large_verge_medium_landscape.jpg", 
+        coords: "472,33,596,101,443,295,314,217"}
+];
+var PHONE_IMAGE_THUMB_SIZE = 100, PHONE_SELECTED;
+
+PHONE_IMAGES.forEach(function(phone) {
+    var li = document.createElement("li");
+    var a = document.createElement("a");
+    a.href = "#";
+    a.onclick = function(e) {
+        var central = document.getElementById("central");
+        if (central) central.parentNode.removeChild(central);
+        var central = new Image();
+        central.src = phone.url;
+        central.id = "central";
+        document.getElementById("central-container").appendChild(central);
+        PHONE_SELECTED = phone;
+        document.querySelector("input").disabled = false;
+        e.preventDefault();
+        return false;
+    }
+    var img = new Image();
+    img.onload = function() {
+        if (img.naturalWidth > img.naturalHeight) {
+            img.style.width = PHONE_IMAGE_THUMB_SIZE + "px";
+            img.style.height = (PHONE_IMAGE_THUMB_SIZE * img.naturalHeight / img.naturalWidth) + "px";
+        } else {
+            img.style.height = PHONE_IMAGE_THUMB_SIZE + "px";
+            img.style.width = (PHONE_IMAGE_THUMB_SIZE * img.naturalWidth / img.naturalHeight) + "px";
+        }
+        li.appendChild(a);
+        a.appendChild(img);
+        document.getElementById("phones").appendChild(li);
+    }
+    img.src = phone.url;
+});
+
+document.getElementById('files').addEventListener('change', function(e) {
+    var files = e.target.files;
+    if (files.length === 1) {
+        var f = files[0];
+        if (!f.type.match("image.*")) {
+            console.log("not an image");
+            return;
+        };
+        var reader = new FileReader();
+        reader.onload = function(e) {
+            var coords = [];
+            PHONE_SELECTED.coords.split(",").forEach(function(item) { 
+                coords.push(parseInt(item, 10));
+            });
+            renderCombinationAsDataUrl(PHONE_SELECTED.url, 
+                e.target.result, coords, function(dataurl) {
+                document.getElementById("central").src = dataurl;
+            });
+        }
+        reader.readAsDataURL(f);
+    }
+}, false);
+
+/*var phoneurl = getParameterByName("phone") || "ba-simple-proxy.php?mode=native&url=" + encodeURIComponent("http://www.htxt.co.za/wp-content/uploads/2013/07/ubuntu-edge-phone5.jpg");
+var appurl = getParameterByName("app") || "ba-simple-proxy.php?mode=native&url=" + encodeURIComponent("http://blog_uploads.s3.amazonaws.com/wp-content/uploads/2013/08/stockticker.png");
+var box = getParameterByName("box") || "602,98,859,238,539,650,270,480";
+var overlays = getParameterByName("overlays");
+display();
+*/
+</script>
+</body>
+</html>
